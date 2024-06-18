@@ -1,0 +1,318 @@
+---
+title: "inferCNV patient_3_ccRCC2_SRR12066652"
+author: "Sigal graboys"
+date: "19 01 2024"
+output: html_document
+keep_md: yes
+---
+# R Markdown Setup
+```{r setup, include=FALSE}
+# Set the root.dir option to the directory of the RMD file
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+# Introduction -
+in this file we will use inferCNV to infer copy number variation from single-cell RNA sequencing data.
+Note: Before using the inferCNV analysis we need to cluster the cells and annotate the clusters.
+
+# Install and Load Packages
+Load infercnv and Seurat libraries in your R session. The detach() command is only needed so that your current R session updates the version in use if the package was already loaded but an update has been installed.
+
+```{r}
+if ("infercnv" %in% names(sessionInfo()$otherPkgs)) {
+    detach("package:infercnv", unload=T)
+}
+library(infercnv)
+library(Seurat)
+```
+
+Code to update infercnv from Github. 
+```{r, eval=FALSE}
+# devtools::install_github("broadinstitute/infercnv")
+```
+
+
+Load infercnv and Seurat libraries in your R session. The detach() command is only needed so that your current R session updates the version in use if the package was already loaded but an update has been installed.
+```{r}
+if ("infercnv" %in% names(sessionInfo()$otherPkgs)) {
+    detach("package:infercnv", unload=T)
+}
+library(infercnv)
+library(Seurat)
+```
+
+Set working directory to data folder and output path
+```{r}
+# setwd("")
+setwd("C:/Users/sigal/OneDrive - Bar Ilan University/master_degree/kaliskyLab/papers/scRNA_Cheng_Su_2021/patient_3_ccRCC2_SRR12066652/infercnv")
+output_dir = "output_dir"
+```
+_______________________________________________________________________________________________________________________________
+# Prepare the data -
+We will use the clusters and annotations from the Identify_cell_populations.Rmd file, and load the seurat object from the rds file.
+After performing clustering on your data, you will have several populations (clusters) of cells. Each cluster represents a different cell population.
+
+```{r}
+# load the seurat object from rds file
+SeuratObj_patient_3_ccRCC2_SRR12066652 = readRDS("SeuratObj_patient_3_ccRCC2_SRR12066652_filtered_final.rds")
+# Identify the Number of Cells in Each Population: To check how many cells are in each population, you can use the table function in R on your Seurat object post-clustering. This will tell you the number of cells in each cluster.
+
+```
+
+```{r}
+
+if(!require('caret')) {
+    install.packages('caret')
+    library('caret')
+}
+
+```
+
+### downsample the data
+```{r}
+# first check the number of cells in each cluster
+table(SeuratObj_patient_3_ccRCC2_SRR12066652@active.ident)
+```
+
+```{r}
+# downsample the data to 100 cells per cluster to speed up the infercnv run
+SeuratObj_patient_3_ccRCC2_SRR12066652 <- subset(SeuratObj_patient_3_ccRCC2_SRR12066652, downsample = 100)
+table(SeuratObj_patient_3_ccRCC2_SRR12066652@active.ident)
+```
+### About data clusters and annotations:
+tumor clusters are: 3, 5, 17
+suspected clusters are: 9, 11
+not tumor are: 0,1,2,4,6,7,8,10,12,13,14,15,16,
+control is: 8
+
+Create the infercnv object from a Seurat object and gene position file.
+```{r}
+# Set options to avoid scientific notation, especially for subclusters analysis
+options(scipen = 100)
+
+ref_group_names <- c("NK cells", "monocytes", "CD8+ T cell 1.1", "CD4+ T cells", "CD8+ T cells 1.2", "CD8+ T cells 2.1", "FCGR3A+ monocytes", "endothelial cells 1.1", "denritic cells", 
+                     "proliferative fibroblast", "CD8+ T cells 2.2", "B cells", "endothelial cells 2", "endothelial cells 1.2")
+
+# help:
+# ?CreateInfercnvObject
+
+infercnv_obj = CreateInfercnvObject(raw_counts_matrix=GetAssayData(object = SeuratObj_patient_3_ccRCC2_SRR12066652, layer = "RNA", slot = "counts"),
+                                    annotations_file=as.matrix(SeuratObj_patient_3_ccRCC2_SRR12066652@active.ident),
+                                    delim="\t",
+                                    gene_order_file="gencode_v19_gene_pos.txt",
+                                    ref_group_names=ref_group_names)
+```
+Run inferCNV:
+
+```{r, results='hide'}
+# help:
+# ?run
+output_dir = "C:/Users/sigal/OneDrive - Bar Ilan University/master_degree/kaliskyLab/papers/scRNA_Cheng_Su_2021/patient_3_ccRCC2_SRR12066652/infercnv/output"
+infercnv_obj_run = infercnv::run(infercnv_obj,
+                                 cutoff=0.05, # for 10x data use 0.1
+                                 out_dir=output_dir, 
+                                 cluster_by_groups=T,
+                                 HMM=T,
+                                 per_chr_hmm_subclusters=F,
+                                 denoise=T,
+                                 up_to_step = 15,
+                                 leiden_resolution = 0.03
+                                 )
+```
+
+Inspect the subclustering and check for signal in the references as that might highlight an issue in the reference selection or how it is annotated. Some narrow regions might show up with both gain and loss signal in certain cell types, most commonly in chromomsome 6 in the MHC genes region. These regions are masked by default during the subclustering.
+
+```{r}
+system(paste("mv", paste0(output_dir, "/infercnv.preliminary.png"), paste0(output_dir, "/infercnv.preliminary_defaults.png")))
+system(paste("mv", paste0(output_dir, "/infercnv_subclusters.png"), paste0(output_dir, "/infercnv_subclusters_defaults.png")))
+knitr::include_graphics(paste0(output_dir, "/infercnv.preliminary_defaults.png"))
+knitr::include_graphics(paste0(output_dir, "/infercnv_subclusters_defaults.png"))
+```
+
+Tweak subclustering settings if needed, then rerun with the new settings, only steps that are affected will be rerun :
+```{r, results='hide', message=FALSE}
+infercnv_obj_full_run = infercnv::run(infercnv_obj,
+                                      cutoff=0.05, 
+                                      out_dir=output_dir, 
+                                      cluster_by_groups=T,
+                                      HMM=T,
+                                      per_chr_hmm_subclusters=F,
+                                      denoise=T,
+                                      leiden_resolution = 0.02,
+                                      up_to_step = 15
+                                      )
+```
+
+```{r}
+knitr::include_graphics(paste0(output_dir, "/infercnv.preliminary.png"))
+knitr::include_graphics(paste0(output_dir, "/infercnv_subclusters.png"))
+```
+
+Finish the run by removing the up_to_step option.
+```{r, results='hide', message=FALSE}
+infercnv_obj_full_run = infercnv::run(infercnv_obj,
+                                      cutoff=0.05, 
+                                      out_dir=output_dir, 
+                                      cluster_by_groups=T,
+                                      HMM=T,
+                                      per_chr_hmm_subclusters=F,
+                                      denoise=T,
+                                      leiden_resolution = 0.03,
+                                      )
+```
+
+```{r}
+knitr::include_graphics(paste0(output_dir, "/infercnv.png"))
+knitr::include_graphics(paste0(output_dir, "/infercnv.17_HMM_predHMMi6.leiden.hmm_mode-subclusters.png"))
+knitr::include_graphics(paste0(output_dir, "/infercnv.19_HMM_pred.Bayes_Net.Pnorm_0.5.png"))
+```
+
+Plot the final residual expression figure with different settings and legend.
+
+```{r, results='hide', message=FALSE}
+# help:
+# ?plot_cnv
+
+plot_cnv(infercnv_obj_full_run,
+         out_dir = output_dir,
+         title = "infercnv figure",
+         obs_title = "ccRCC cells",
+         ref_title = "immune cells",
+         cluster_by_groups = TRUE,
+         plot_chr_scale = TRUE,
+         color_safe_pal = TRUE,
+         output_filename = "infercnv_scaled_to_chr"
+         )
+```
+
+```{r}
+knitr::include_graphics(paste0(output_dir, "/infercnv_scaled_to_chr.png"))
+```
+
+We can plot the figure with a taller pixel height so cells are less compressed by using the dynamic_resize option.
+```{r, results='hide', message=FALSE}
+# help:
+# ?plot_cnv
+
+plot_cnv(infercnv_obj_run,
+         out_dir = output_dir,
+         title = "infercnv figure",
+         obs_title = "ccRCC cells",
+         ref_title = "immune cells",
+         cluster_by_groups = TRUE,
+         plot_chr_scale = FALSE,
+         dynamic_resize = 0.5,
+         color_safe_pal = TRUE,
+         output_filename = "infercnv_bigger"
+         )
+```
+
+
+```{r}
+knitr::include_graphics(paste0(output_dir, "/infercnv_bigger.png"))
+```
+
+We can plot each group of cells on a separate figure based on their annotations to have less compressed heatmaps.
+```{r, results='hide', message=FALSE}
+plot_per_group(infercnv_obj_run,
+               on_references = FALSE,
+               on_observations = TRUE,
+               sample = FALSE,
+               out_dir = output_dir
+               )
+```
+
+```{r}
+
+knitr::include_graphics(paste0(output_dir, "/infercnv_per_group_OBS_ccRCC 1.png"))
+knitr::include_graphics(paste0(output_dir, "/infercnv_per_group_OBS_ccRCC 2.png"))
+knitr::include_graphics(paste0(output_dir, "/infercnv_per_group_OBS_ccRCC 3.png"))
+knitr::include_graphics(paste0(output_dir, "/infercnv_per_group_OBS_ccRCC 4.png"))
+
+
+```
+Import the Seurat object and add the infercnv HMM results to it. This step also generated a file "map_metadata_from_infercnv.txt" that contains the same information as a text table.
+
+```{r, results='hide', message=FALSE}
+# help:
+# ?infercnv_to_seurat
+
+
+SeuratObj_patient_3_ccRCC2_SRR12066652_HMM = add_to_seurat(seurat_obj = SeuratObj_patient_3_ccRCC2_SRR12066652, infercnv_output_path = output_dir)
+```
+
+Plot the cell annotations used in infercnv on the UMAP included in the Seurat object, in this example, the annotation information is contained in ped_midline_gliomas_seurat_with_hmm@active.identity .
+```{r, results='hide', message=FALSE}
+png(paste0(output_dir, "/annotations.png"), width=1920, height=1440, res=288)
+DimPlot(SeuratObj_patient_3_ccRCC2_SRR12066652_HMM,
+        reduction="umap",
+        # label = TRUE,
+        pt.size=0.5
+        )
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(paste0(output_dir, "/annotations.png"))
+```
+
+Plot the subcluster calculated by infercnv on the UMAP.
+```{r, results='hide', message=FALSE}
+png(paste0(output_dir, "/seurat_with_subclusters.png"), width=1920, height=1440, res=288)
+DimPlot(SeuratObj_patient_3_ccRCC2_SRR12066652_HMM,
+        reduction="umap",
+        group.by="infercnv_subcluster",
+        pt.size=0.5
+        )
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(paste0(output_dir, "/seurat_with_subclusters.png"))
+```
+
+
+Plot on the umap which cells are predicted by the HMM to have a duplication on chromosome 1, with the intensity scaling with the size of the CNV and the fold level of change. For continuous values we use FeaturePlot() and the "features" argument.
+```{r, results='hide', message=FALSE}
+png(paste0(output_dir, "/proportion_scaled_loss_chr3p.png"), width=1920, height=1440, res=288)
+FeaturePlot(SeuratObj_patient_3_ccRCC2_SRR12066652_HMM,
+            reduction="umap",
+            features="proportion_scaled_loss_chr3"
+            ) + ggplot2::scale_colour_gradient(low="lightgrey", high="red", limits=c(0,1))
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(paste0(output_dir, "/proportion_scaled_loss_chr3p.png"))
+```
+
+
+For discrete values, we use DimPlot with the "group.by" option to determine which information to display.
+```{r, results='hide', message=FALSE}
+png(paste0(output_dir, "/top_loss_2.png"), width=1920, height=1440, res=288)
+DimPlot(SeuratObj_patient_3_ccRCC2_SRR12066652_HMM,
+        reduction="umap",
+        group.by="top_loss_2",
+        pt.size=0.5
+        )
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(paste0(output_dir, "/top_loss_2.png"))
+```
+
+```{r}
+png(paste0(output_dir, "/top_loss_1.png"), width=1920, height=1440, res=288)
+DimPlot(SeuratObj_patient_3_ccRCC2_SRR12066652_HMM,
+        reduction="umap",
+        group.by="top_loss_1",
+        pt.size=0.5
+        )
+dev.off()
+
+```
+
+```{r}
+knitr::include_graphics(paste0(output_dir, "/top_loss_1.png"))
+```

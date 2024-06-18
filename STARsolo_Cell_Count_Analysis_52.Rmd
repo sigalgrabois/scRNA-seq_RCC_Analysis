@@ -1,0 +1,246 @@
+---
+title: "STARsolo Cell Count Analysis - patient_3_ccRCC2_SRR12066652"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE)
+library(Seurat)
+library(Matrix)
+library(ggplot2)
+library(scales)
+library(DropletUtils)
+library(edgeR)
+```
+
+In this tutorial, we will demonstrate how to perform cell count analysis as being used in STARsolo,
+the algorithm that STARsolo uses in order to make the cell filter (using EmptyDrops_CR for soloCellFilter parameter) is described in the following link:
+https://genomebiology.biomedcentral.com/articles/10.1186/s13059-019-1662-y
+
+# Load and Process STARsolo Data
+```{r}
+# Load the dataset
+ccRCC.data <- Read10X(data.dir = "./raw")
+# Initialize the Seurat object with the raw (non-normalized data).
+ccRCC_p3 <- CreateSeuratObject(counts = ccRCC.data, project = "ccRCC_p3")
+ccRCC_p3
+```
+
+# basic Analysis and Visualization
+
+Step 1: Calculate total UMI counts per barcode
+
+```{r}
+
+# Ensure we are working with the RNA assay
+DefaultAssay(ccRCC_p3) <- "RNA"
+
+# Now calculate the total UMI counts
+# Using the 'layer' argument as per the updated Seurat syntax
+total_umi_counts <- Matrix::colSums(GetAssayData(ccRCC_p3, layer = "counts"))
+total_umi_counts[1:10]
+
+```
+
+Step 2: Sort barcodes by total UMI counts
+```{r}
+sorted_umi_counts <- sort(total_umi_counts, decreasing = TRUE)
+sorted_umi_counts[1:10]
+
+
+# Find the index of the first barcode with a zero count
+zero_count_index <- which(sorted_umi_counts == 0)[1]
+
+```
+
+Step 3: Visualizing the results up to the first zero count
+
+
+```{r}
+# If there is no zero count, plot all
+if (!is.na(zero_count_index)) {
+    # Filter the counts to include only up to the first zero count
+    plot_umi_counts <- sorted_umi_counts[1:(zero_count_index-1)]
+} else {
+    plot_umi_counts <- sorted_umi_counts
+}
+```
+
+```{r}
+
+# Assuming 'sorted_umi_counts' contains your UMI counts per barcode
+
+# Create a dataframe for plotting
+barcode_data <- data.frame(
+  Barcode = seq_along(sorted_umi_counts),
+  UMI_Counts = sorted_umi_counts
+)
+
+# Define custom breaks and labels for the axes
+x_breaks <- c(10, 100, 1000, 10^4, 10^5, 10^6)
+x_labels <- c("10", "100", "1k", "10k", "100k", "1M")
+
+y_breaks <- c(10, 100, 1000, 10^4, 10^5)
+y_labels <- c("10", "100", "1k", "10k", "100k")
+
+# Generate the barcode rank plot
+ggplot(barcode_data, aes(x = Barcode, y = UMI_Counts)) +
+  geom_line() +
+  scale_x_log10(breaks = x_breaks, labels = x_labels) +
+  scale_y_log10(breaks = y_breaks, labels = y_labels) +
+  labs(title = "Barcode Rank Plot",
+       x = "Barcodes",
+       y = "UMI Counts") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5)) # Center the plot title
+
+```
+```{r}
+# save this plot as a png file in ../figures folder with the name Barcode_Rank_Plot.png
+ggsave("../figures/Barcode_Rank_Plot.png", width = 10, height = 6, dpi = 300)
+
+```
+
+# EmptyDrops Analysis
+## Initial UMI Counts Analysis
+The `EmptyDrops` function is used to identify genuine cells from empty droplets based on the distribution of UMI counts across barcodes. The barcodes that correspond to cells are expected to have a higher number of UMIs.
+
+## Step 1: Applying EmptyDrops
+We will apply the `EmptyDrops` function to the count data. This function will return a list of likely cell-containing barcodes based on the distribution of UMI counts.
+
+```{r}
+# Applying EmptyDrops
+# It is assumed that ccRCC_p3 is a Seurat object and the count data are stored accordingly.
+# Extract the count matrix from the Seurat object
+count_matrix <- GetAssayData(ccRCC_p3, assay = "RNA", layer = "counts")
+
+# Run emptyDrops
+emptydrops_results <- emptyDrops(count_matrix)
+
+## show the results again but with decreasing FDR
+emptydrops_results[order(emptydrops_results$Total, decreasing = TRUE), ]
+```
+
+## Step 2: Filtering Barcodes
+
+Next, we filter the barcodes based on the FDR to retain likely cell-containing droplets. Typically, an FDR threshold of 0.01 is used, but this can be adjusted based on the dataset.
+
+```{r}
+# Set the FDR threshold
+fdr_threshold <- 0.001
+
+is.cell <- emptydrops_results$FDR <=fdr_threshold
+sum(is.cell, na.rm=TRUE)
+
+# Subsetting the matrix to the cell-containing droplets.
+# (using 'which()' to handle NAs smoothly).
+cell.counts <- count_matrix[,which(is.cell),drop=FALSE]
+dim(cell.counts)
+
+```
+
+```{r}
+
+# Check if p-values are lower-bounded by 'niters'
+# (increase 'niters' if any Limited==TRUE and Sig==FALSE)
+table(Sig=is.cell, Limited=emptydrops_results$Limited)
+
+```
+
+## Step 3: Visualizing the Results After Applying EmptyDrops
+We can now visualize the UMI counts of the retained barcodes to compare against the initial UMI counts.
+```{r}
+
+# Get the UMI counts for the retained barcodes
+retained_barcodes <- which(is.cell)
+retained_umi_counts <- total_umi_counts[retained_barcodes]
+
+# Sort the retained UMI counts for better visualization
+sorted_retained_umi_counts <- sort(retained_umi_counts, decreasing = TRUE)
+
+```
+
+```{r}
+
+# Create a data frame for the filtered UMI counts
+barcode_data_filtered <- data.frame(
+  Barcode = seq_along(sorted_retained_umi_counts),
+  UMI_Counts = sorted_retained_umi_counts)
+```
+
+```{r}
+
+# Define custom breaks and labels for the axes
+x_breaks <- c(10, 100, 1000, 10^4, 10^5, 10^6)
+x_labels <- c("10", "100", "1k", "10k", "100k", "1M")
+
+y_breaks <- c(10, 100, 1000, 10^4, 10^5)
+y_labels <- c("10", "100", "1k", "10k", "100k")
+
+# Generate the barcode rank plot for the filtered data
+ggplot(barcode_data_filtered, aes(x = Barcode, y = UMI_Counts)) +
+  geom_line() +
+    scale_x_log10(breaks = x_breaks, labels = x_labels) +
+  scale_y_log10(breaks = y_breaks, labels = y_labels) +
+  labs(title = "Barcode Rank Plot After Applying EmptyDrops",
+       x = "Barcodes",
+       y = "UMI Counts") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+
+```
+
+```{r}
+
+initial_umi_plot <- ggplot(barcode_data, aes(x = Barcode, y = UMI_Counts)) +
+    geom_line() +
+    scale_x_log10(labels = trans_format("log10", math_format(10^.x))) +
+    scale_y_log10(labels = trans_format("log10", math_format(10^.x))) +
+    labs(title = "Initial Barcode Rank Plot",
+         x = "Barcodes",
+         y = "UMI Counts") +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.2))
+
+```
+
+```{r}
+
+filtered_umi_plot <- ggplot(barcode_data_filtered, aes(x = Barcode, y = UMI_Counts)) +
+    geom_line() +
+    scale_x_log10(labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+    scale_y_log10(labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+    labs(title = "Barcode Rank After EmptyDrops",
+         x = "Barcodes",
+         y = "UMI Counts") +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.2))
+
+
+```
+
+```{r plot, out.width='700px', out.height='400px'}
+# Assuming you have a plot object for the initial UMI counts named `initial_umi_plot`
+# and the plot after filtering named `filtered_umi_plot`
+
+# Using gridExtra
+library(gridExtra)
+
+# Create the grid plot
+grid_plot <- grid.arrange(initial_umi_plot, filtered_umi_plot, ncol = 2, widths = c(1, 1))
+
+# Set the file path where you want to save the PNG file
+file_path <- "../figures/Barcode_Rank_Plot_before_after_EmptyDrops.png"
+
+# Save the grid plot as a PNG file
+ggsave(filename = file_path, plot = grid_plot, width = 7, height = 4, units = "in")
+ 
+
+
+```
+
+
+

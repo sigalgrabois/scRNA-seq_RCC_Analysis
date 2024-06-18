@@ -1,0 +1,816 @@
+---
+title: "Identify_cell_populations patient_3_ccRCC2_SRR12066652"
+author: "Sigal graboys"
+date: "14 01 2024"
+output: html_document
+keep_md: yes
+---
+
+## set the working directory
+```{r}
+work_dir <- "C:/Users/sigal/OneDrive - Bar Ilan University/master_degree/kaliskyLab/papers/scRNA_Cheng_Su_2021/patient_3_ccRCC2_SRR12066652/GeneFull"
+#setwd(work_dir)
+# save the date and make a directory for the results
+date <- format(Sys.Date(), "%d_%m_%Y")
+
+```
+
+## Introduction
+
+This document describes the process of analyzing single-cell RNA sequencing data to identify distinct cell populations. We will use the Seurat package for data pre-processing, normalization, clustering, and visualization.
+
+## R Markdown Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Install and Load Packages
+```{r}
+packages <- c("Seurat" ,"readxl", "ggplot2", "dplyr", "patchwork")
+new.packages <- packages[!(packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+lapply(packages, library, character.only= TRUE)
+```
+
+## Data Loading
+
+```{r}
+# Load the dataset - patient 2 ccRCC filtered data (after STARsolo) Gene Full
+patient_3_ccRCC2_SRR12066652.data <- Read10X(data.dir = "./filtered")
+# Initialize the Seurat object with the raw (non-normalized data).
+SeuratObj_patient_3_ccRCC2_SRR12066652 <- CreateSeuratObject(counts = patient_3_ccRCC2_SRR12066652.data, project = "SeuratObj_patient_3_ccRCC2_SRR12066652")
+SeuratObj_patient_3_ccRCC2_SRR12066652
+```
+
+## QC and selecting cells for further analysis
+
+Note: the high percentage of mitochondrial gene expression serves as a significant indicator of apoptosis, reflecting the critical role of mitochondria in cell death processes and the molecular dynamics associated with cellular stress and damage.
+Research indicates that cells with a higher mitochondrial content are more prone to die, suggesting that mitochondrial levels can influence apoptotic cell fate
+
+Filterng the data:
+```{r}
+SeuratObj_patient_3_ccRCC2_SRR12066652[["percent.mt"]] <- PercentageFeatureSet(SeuratObj_patient_3_ccRCC2_SRR12066652, pattern = "^MT-")
+# store mitochondrial percentage in object meta data
+SeuratObj_patient_3_ccRCC2_SRR12066652 <- PercentageFeatureSet(SeuratObj_patient_3_ccRCC2_SRR12066652, pattern = "^MT-", col.name = "percent.mt")
+```
+
+## Data Preprocessing - SeuratObj_patient_3_ccRCC2_SRR12066652
+QC and selecting cells for further analysis:
+```{r}
+SeuratObj_patient_3_ccRCC2_SRR12066652$short.labels <- "p3_ccRCC2"
+
+# Visualize QC metrics as a violin plot - no legend
+VlnPlot(SeuratObj_patient_3_ccRCC2_SRR12066652, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = 
+          "short.labels")
+
+```
+```{r}
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+plot1 <- FeatureScatter(SeuratObj_patient_3_ccRCC2_SRR12066652, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(SeuratObj_patient_3_ccRCC2_SRR12066652, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1
+plot2
+
+```
+
+
+```{r}
+lower_bound <- 200
+upper_bound <- 5000
+mito_threshold <- 10
+
+# Quality control and filtering
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered <- subset(SeuratObj_patient_3_ccRCC2_SRR12066652, subset = nFeature_RNA > lower_bound & nFeature_RNA < upper_bound & SeuratObj_patient_3_ccRCC2_SRR12066652[["percent.mt"]] < mito_threshold)
+
+```
+
+
+## Normalize the data
+
+```{r}
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered <- NormalizeData(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, normalization.method = "LogNormalize", scale.factor = 10000)
+
+```
+
+## Scaling the data
+
+```{r}
+all.genes <- rownames(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered)
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered <- ScaleData(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered)
+
+```
+
+## Identify highly variable features - Feature selection
+
+```{r}
+# Find variable features
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered <- FindVariableFeatures(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, selection.method = "vst", nfeatures = 3000)
+# identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered), 20)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot2
+
+# Assuming you have a plot called 'plot2'
+plot2 <- plot2 + theme_minimal() +
+  theme(
+    panel.background = element_rect(fill = "white", colour = "white"),
+    plot.background = element_rect(fill = "white", colour = "white")
+  )
+# save the plot into a file
+plot_path <- paste0("../figures/", date)
+ggsave("VariableFeaturePlot.png", plot = plot2, device = "png", path = plot_path)
+
+```
+
+## Perform dimensionality reduction by PCA
+
+```{r}
+## PCA run and visualization
+
+# It's important to consider the number of dimensions (PCs) to use. 
+# The number of PCs to consider can be based on a scree plot or the cumulative variance explained.
+
+# Running PCA
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered <- RunPCA(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, features = VariableFeatures(object = SeuratObj_patient_3_ccRCC2_SRR12066652_filtered), npcs = 50)
+```
+
+```{r}
+
+# Visualizing Dimension Loadings - can help identify which genes are driving the variation in each PC
+# It might be insightful to look at a wider range of dimensions given the complexity of ccRCC
+
+# Visualize loadings for first 10 dimensions
+VizDimLoadings(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, dims = 1:10, reduction = "pca")
+
+# Considering extending the range of dimensions visualized
+VizDimLoadings(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, dims = 11:20, reduction = "pca")
+VizDimLoadings(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, dims = 21:30, reduction = "pca")  # Added visualization for dimensions 21-30
+ 
+```
+To determine the number of principal components (PCs) to be used for clustering in the next step, lets check three different methods to examine the data.
+Dimensional reduction techniques aim to capture and maximize the variance
+present in the reduced data. Therefore, we seek to identify the principal
+components that contribute the most to this variance.
+
+### heatmap of the variable features
+```{r}
+DimPlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, reduction = "pca")
+DimHeatmap(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, dims = 1:10, cells = 500, balanced = TRUE)
+DimHeatmap(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, dims = 10:20, cells = 500, balanced = TRUE)
+DimHeatmap(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, dims = 20:30, cells = 500, balanced = TRUE)
+```
+
+### jackstraw plot
+```{r}
+# Run JackStraw for 30 dimensions
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered <- JackStraw(object = SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, num.replicate = 100, dims = 30)
+```
+
+```{r}
+
+# Score JackStraw for dimensions 1 to 30
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered <- ScoreJackStraw(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, dims = 1:30)
+
+# Plot JackStraw for dimensions 1 to 30
+JackStrawPlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, dims = 1:30, xmax = 0.2, ymax = 0.5)
+
+
+```
+
+### elbow plot
+```{r}
+# Elbow plot
+ElbowPlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, ndims = 50)
+
+```
+
+### Cluster the cells
+
+```{r}
+
+dims_max <- 25
+resulotion <- 0.8
+plot_path <- paste0("../figures/", date)
+
+# Assuming PCA has already been performed
+# Find neighbors using an appropriate number of dimensions (e.g., 25)
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered <- FindNeighbors(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, dims = 1:dims_max)
+
+# Find clusters with a resolution of 0.6 (as per the paper)
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered <- FindClusters(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, resolution = resulotion)
+
+# Look at the cluster IDs of the first 5 cells
+head(Idents(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered), 5)
+
+
+```
+### Run non-linear dimensional reduction (UMAP/tSNE)
+
+```{r}
+# Run UMAP using 25 principal components
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered <- RunUMAP(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, dims = 1:dims_max)
+UMAP_dimplot <- DimPlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, reduction = "umap", label = TRUE)
+# save the umap
+plot_path <- paste0(plot_path,"/",dims_max, "PC_", resulotion, "res")
+ggsave("UMAP_dimplot.png", plot = UMAP_dimplot, device = "png", path = plot_path)
+UMAP_dimplot
+
+```
+
+```{r}
+# Run tSNE using 25 principal components
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered <- RunTSNE(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, dims = 1:dims_max)
+TSNE_dimplot <- DimPlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, reduction = "tsne", label = TRUE)
+TSNE_dimplot
+
+# save the tsne
+ggsave("TSNE_dimplot.png", plot = TSNE_dimplot, device = "png", path = plot_path)
+
+```
+
+## Finding differentially expressed features (cluster biomarkers)
+
+```{r}
+
+# find markers for every cluster compared to all remaining cells, report only the positive
+# ones
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered.markers <- FindAllMarkers(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, only.pos = TRUE, min.pct = 0.5, logfc.threshold = 0.25)
+print(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered.markers %>% group_by(cluster) %>% slice_max(n =10, order_by = avg_log2FC), n = inf)
+
+
+```
+
+```{r}
+
+top_genes_per_cluster <- SeuratObj_patient_3_ccRCC2_SRR12066652_filtered.markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 25, order_by = avg_log2FC)
+
+# save the top genes per cluster to a file the path is the path to the results directory
+
+write.csv(top_genes_per_cluster, file = paste0(plot_path, "/top_genes_per_cluster.csv"))
+
+```
+
+# visualize cluster markers
+
+
+```{r}
+# Set the plot size
+options(repr.plot.width = 10, repr.plot.height = 5)
+# according to the paper, the following genes are markers for ccRCC cell types from previous studies
+
+VlnPlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, features = c("CA9", "NDUFA4L2"))
+ggsave("CA9_NDUFA4L2.png", device = "png", path = plot_path)
+```
+
+```{r}
+# NEW - gene markers from the paper
+VlnPlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, features = c("SPOCK1", "PTGIS", "REG1A"))
+ggsave("SPOCK1_PTGIS_REG1A.png", device = "png", path = plot_path)
+```
+
+```{r}
+VlnPlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, features = c("CP", "SPAG4"))
+ggsave("CP_SPAG4.png", device = "png", path = plot_path)
+```
+
+### feature plot ccRCC markers
+```{r}
+ccRCC_markers <- c("CA9", "NDUFA4L2", "SPOCK1", "PTGIS", "REG1A", "CP", "SPAG4")
+
+# loop through each marker and create a feature plot
+for (i in 1:length(ccRCC_markers)) {
+  plot <- FeaturePlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, 
+                      features = ccRCC_markers[i], 
+                      cols = c("grey", "red"), 
+                      reduction = "umap", 
+                      pt.size = 1, 
+                      min.cutoff = 0.001, 
+                      max.cutoff = 4, label = TRUE)
+  
+  # Print the plot
+  print(plot)
+  # save the plot
+  ggsave(paste0(ccRCC_markers[i], ".png"), plot = plot, device = "png", path = paste0(plot_path, "/ccRCC_markers/"))
+}
+
+
+```
+
+
+### Feature plot for Top2A and MKI67
+```{r}
+Top2A_MKI67 <- c("TOP2A", "MKI67")
+for (i in 1:length(Top2A_MKI67)) {
+  plot <- FeaturePlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, 
+                      features = Top2A_MKI67[i], 
+                      cols = c("grey", "red"), 
+                      reduction = "umap", 
+                      pt.size = 0.15, 
+                      min.cutoff = 0.1, 
+                      max.cutoff = 10, label = TRUE)
+  
+  # Print the plot
+  print(plot)
+  # save the plot
+  ggsave(paste0(Top2A_MKI67[i], ".png"), plot = plot, device = "png", path = paste0(plot_path, "/Top2A_MKI67/"))
+}
+
+```
+### run markers from the paper for each cell type - table
+make a directory for the results
+pRCC - CDKN2A (17)
+chRCC - RHCG (42)
+Macrophage - CD68 (58), CD163 (58)
+Monocyte - CD14 (46, 48, 57), LYZ (57, 58), S100A12 (58), S100A9 (58), S100A8 (58)
+Dendritic cells - FCER1A (46–48), CD1E (46–48), CD1C (46–48), HLA-DMA (46–48), HLA-DMB (46–48)
+NK cells - KLRD1 (61), KLRC1 (61)
+Fibroblast - SFRP2 (51), SPARC (60), MMP2 (52, 53), COL3A1 (55), COL1A1 (55, 56), COL1A2 (55, 56)
+Endothelial cells - PECAM1 (50), PLVAP (50), CDH5 (50), KDR (50)
+ccRCC - CA9 (13), NDUFA4L2 (49)
+CD8+ T cells - CD3D (43, 44, 58), CD3E (43, 44, 58), CD8a (43, 44, 58)
+CD4+ T cells - CD3E (43, 44, 58), CD3D (43, 44, 58), IL7R (44, 63)
+B cells - CD79A (43, 57), CD79B (43, 57), MS4A1 (57)
+Plasma cells - IGKC (45)
+Mast cells - TPSAB1 (62), TPSB2 (62), KIT (59)
+CAF - ACTA2 (52), TAGLN (53)
+TAM - GPNMB (58), SLC40A1 (58), MSR1 (64)
+
+```{r}
+
+cell_type_markers <- list(
+  pRCC = c("CDKN2A"),
+  chRCC = c("RHCG"),
+  Macrophage = c("CD68", "CD163"),
+  Monocyte = c("CD14", "LYZ", "S100A12", "S100A9", "S100A8"),
+  Dendritic_cells = c("FCER1A", "CD1E", "CD1C", "HLA-DMA", "HLA-DMB"),
+  NK_cells = c("KLRD1", "KLRC1"),
+  Fibroblast = c("SFRP2", "SPARC", "MMP2", "COL3A1", "COL1A1", "COL1A2"),
+  Fibroblast2 = c("EMILIN1", "PDGFRB"),
+  Endothelial_cells = c("PECAM1", "PLVAP", "CDH5", "KDR"),
+  ccRCC = c("CA9", "NDUFA4L2"),
+  CD8_T_cells = c("CD3D", "CD3E", "CD8A"),
+  CD4_T_cells = c("CD3E", "CD3D", "IL7R"),
+  B_cells = c("CD79A", "CD79B", "MS4A1"),
+  Plasma_cells = c("IGKC"),
+  Mast_cells = c("TPSAB1", "TPSB2", "KIT"),
+  CAF = c("ACTA2", "TAGLN"),
+  TAM = c("GPNMB", "SLC40A1", "MSR1")
+)
+# for each cell type, create a feature plot for the markers
+for (i in 1:length(cell_type_markers)) {
+  plot <- FeaturePlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, 
+                      features = cell_type_markers[[i]], 
+                      cols = c("grey", "red"), 
+                      reduction = "umap", 
+                      pt.size = 0.3, 
+                      min.cutoff = 0.1, 
+                      max.cutoff = 3, label = TRUE)
+  
+  # Print the plot
+  print(plot)
+  # save the plot
+  ggsave(paste0(names(cell_type_markers)[i], ".png"), plot = plot, device = "png", path = paste0(plot_path, "/cell_type_paper_markers/"))
+}
+
+```
+### make feature plots for the cell type markers from the paper seperately for each cell type
+
+```{r}
+
+# Define your cell type markers as before
+cell_type_markers <- list(
+  pRCC = c("CDKN2A"),
+  Macrophage = c("CD68", "CD163"),
+  Monocyte = c("CD14", "LYZ", "S100A12", "S100A9", "S100A8"),
+  Dendritic_cells = c("FCER1A", "CD1E", "CD1C", "HLA-DMA", "HLA-DMB"),
+  NK_cells = c("KLRD1", "KLRC1"),
+  Fibroblast = c("SFRP2", "SPARC", "MMP2", "COL3A1", "COL1A1", "COL1A2"),
+  Fibroblast2 = c("EMILIN1", "PDGFRB"),
+  Endothelial_cells = c("PECAM1", "PLVAP", "CDH5", "KDR"),
+  ccRCC = c("CA9", "NDUFA4L2"),
+  CD8_T_cells = c("CD3D", "CD3E", "CD8A"),
+  CD4_T_cells = c("CD3E", "CD3D", "IL7R"),
+  B_cells = c("CD79A", "CD79B", "MS4A1"),
+  Plasma_cells = c("IGKC"),
+  Mast_cells = c("TPSAB1", "TPSB2", "KIT"),
+  CAF = c("ACTA2", "TAGLN"),
+  TAM = c("GPNMB", "SLC40A1", "MSR1")
+)
+
+
+
+# Ensure the base directory exists; create it if it doesn't
+if (!dir.exists(paste0(plot_path, "/cell_type_paper_markers/"))) {
+  dir.create(paste0(plot_path, "/cell_type_paper_markers/"), recursive = TRUE)
+}
+
+# Loop through each cell type
+for (cell_type in names(cell_type_markers)) {
+  # Define the directory path for this cell type
+  cell_type_dir <- paste0(plot_path, "/cell_type_paper_markers/", cell_type)
+  
+  # Create the directory if it doesn't already exist
+  if (!dir.exists(cell_type_dir)) {
+    dir.create(cell_type_dir)
+  }
+  
+  # Get the marker genes for this cell type
+  markers <- cell_type_markers[[cell_type]]
+  
+  # Loop through each marker gene
+  for (marker in markers) {
+    # Create the feature plot for this marker gene
+    plot <- FeaturePlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, 
+                        features = marker, 
+                        cols = c("grey", "red"), 
+                        reduction = "umap", 
+                        pt.size = 0.5, 
+                        min.cutoff = 0.1, 
+                        max.cutoff = 3, label = TRUE)
+    
+    # Print the plot (optional, you may remove this line if you don't want to print)
+    print(plot)
+    
+    # Define the filename for this plot
+    filename <- paste0(marker, ".png")
+    
+    # Save the plot to the appropriate directory
+    ggsave(file.path(cell_type_dir, filename), plot = plot, device = "png")
+  }
+}
+
+
+```
+
+
+### feature plot for each cell type according to the supplementary table
+B cells - JCHAIN,MZB1,DERL3,CD79A,TNFRSF17,JSRP1
+
+CAF 1 - SOD3
+TPPP3
+PLN
+HIGD1B
+COX4I2
+MYH11
+
+CAF 2 - ITGA11
+FST
+SGCD
+NTM
+CST6
+SPOCK1
+C5orf46
+
+ccRCC 1 - KHK
+SLC17A3
+RBP5
+RIDA
+SMIM24
+DNPH1
+SLC16A12
+
+ccRCC 2 - RPL6
+BTF3
+LINC00958
+EIF1
+SCD
+CES4A
+
+ccRCC 3 - HNRNPH3
+EIF2S2
+EIF2S3
+PSMB4
+EIF4H
+AIMP1
+STAT3
+
+ccRCC 4 - LRRC75A
+HEBP2
+POLR1D
+
+CD14+ monocytes - SERPINB2
+RETN
+VNN1
+AC245128.3
+CCL20
+FPR2
+CLIP4
+KCNAB2
+
+CD4+ T cells - CD40LG
+CCR7
+CD28
+RCAN3
+CD6
+FLT3LG
+CDC14A
+
+CD8+ T cells 1 -
+TRGC2
+KLRG1
+LINC01871
+TRG-AS1
+RABGAP1L
+RNF167
+SSBP4
+RBL2
+
+CD8+ T cells 2 - TNFRSF9
+TTN
+CCDC141
+LAG3
+CRTAM
+LINC01934
+TIGIT
+GPR174
+
+Dendritic cells - CLEC10A
+CD1E
+CD1C
+FLT3
+P2RY14
+SPIB
+GPAT3
+
+Endothelial cells 1 - ESM1
+FLT1
+ENPP2
+INSR
+EFNB2
+INHBB
+KDR
+KCNE3
+
+Endothelial cells 2 - ACKR1
+POSTN
+FBLN2
+MMRN1
+TFF3
+ADGRG6
+CCL14
+
+FCGR3A+ monocytes - FAM110A
+ZNF703
+LILRB1
+SLC2A6
+GPBAR1
+CD300LF
+LINC02432
+
+macrophages 1 - GK
+IL1A
+DPYD
+ARL5B
+BST1
+ZNF385A
+ZC3H12A
+PGD
+
+mast cells - TPSAB1
+TPSB2
+CPA3
+HPGDS
+MS4A2
+IL1RL1
+KIT
+
+NK cells - KLRF1
+TRDC
+S100B
+XCL2
+MYOM2
+IL2RB
+
+Proliferative fibroblast - 
+MKI67
+CENPF
+TOP2A
+PCLAF
+UBE2C
+ASPM
+TPX2
+
+TAM - FOLR2
+LGMN
+GPNMB
+SLCO2B1
+LIPA
+F13A1
+IGF1
+
+```{r}
+cell_type_markers <- list(
+  B_cells = c("JCHAIN", "MZB1", "DERL3", "CD79A", "TNFRSF17", "JSRP1"),
+  CAF_1 = c("SOD3", "TPPP3", "PLN", "HIGD1B", "COX4I2", "MYH11"),
+  CAF_2 = c("ITGA11", "FST", "SGCD", "NTM", "CST6", "SPOCK1", "C5orf46"),
+  ccRCC_1 = c("KHK", "SLC17A3", "RBP5", "RIDA", "SMIM24", "DNPH1", "SLC16A12"),
+  ccRCC_2 = c("RPL6", "BTF3", "LINC00958", "EIF1", "SCD", "CES4A"),
+  ccRCC_3 = c("HNRNPH3", "EIF2S2", "EIF2S3", "PSMB4", "EIF4H", "AIMP1", "STAT3"),
+  ccRCC_4 = c("LRRC75A", "HEBP2", "POLR1D"),
+  CD14_monocytes = c("SERPINB2", "RETN", "VNN1", "AC245128.3", "CCL20", "FPR2", "CLIP4", "KCNAB2"),
+  CD4_T_cells = c("CD40LG", "CCR7", "CD28", "RCAN3", "CD6", "FLT3LG", "CDC14A"),
+  CD8_T_cells_1 = c("TRGC2", "KLRG1", "LINC01871", "TRG-AS1", "RABGAP1L", "RNF167", "SSBP4", "RBL2"),
+  CD8_T_cells_2 = c("TNFRSF9", "TTN", "CCDC141", "LAG3", "CRTAM", "LINC01934", "TIGIT", "GPR174"),
+  Dendritic_cells = c("CLEC10A", "CD1E", "CD1C", "FLT3", "P2RY14", "SPIB", "GPAT3"),
+  Endothelial_cells_1 = c("ESM1", "FLT1", "ENPP2", "INSR", "EFNB2", "INHBB", "KDR", "KCNE3"),
+  Endothelial_cells_2 = c("ACKR1", "POSTN", "FBLN2", "MMRN1", "TFF3", "ADGRG6", "CCL14"),
+  FCGR3A_monocytes = c("FAM110A", "ZNF703", "LILRB1", "SLC2A6", "GPBAR1", "CD300LF", "LINC02432"),
+  macrophages_1 = c("GK", "IL1A", "DPYD", "ARL5B", "BST1", "ZNF385A", "ZC3H12A", "PGD"),
+  mast_cells = c("TPSAB1", "TPSB2", "CPA3", "HPGDS", "MS4A2", "IL1RL1", "KIT"),
+  NK_cells = c("KLRF1", "TRDC", "S100B", "XCL2", "MYOM2", "IL2RB"),
+  Proliferative_fibroblast = c("MKI67", "CENPF", "TOP2A", "PCLAF", "UBE2C", "ASPM", "TPX2"),
+  TAM = c("FOLR2", "LGMN", "GPNMB", "SLCO2B1", "LIPA", "F13A1", "IGF1")
+)
+
+# Ensure the base directory exists; create it if it doesn't
+if (!dir.exists(paste0(plot_path, "/sup_table_paper_markers/"))) {
+  dir.create(paste0(plot_path, "/sup_table_paper_markers/"), recursive = TRUE)
+}
+
+# Loop through each cell type
+for (cell_type in names(cell_type_markers)) {
+  # Define the directory path for this cell type
+  cell_type_dir <- paste0(plot_path, "/sup_table_paper_markers/", cell_type)
+  
+  # Create the directory if it doesn't already exist
+  if (!dir.exists(cell_type_dir)) {
+    dir.create(cell_type_dir)
+  }
+  
+  # Get the marker genes for this cell type
+  markers <- cell_type_markers[[cell_type]]
+  
+  # Loop through each marker gene
+  for (marker in markers) {
+    # Create the feature plot for this marker gene
+    plot <- FeaturePlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, 
+                        features = marker, 
+                        cols = c("grey", "red"), 
+                        reduction = "umap", 
+                        pt.size = 1, 
+                        min.cutoff = 0.1, 
+                        max.cutoff = 3, label = TRUE)
+    
+    # Print the plot (optional, you may remove this line if you don't want to print)
+    print(plot)
+    
+    # Define the filename for this plot
+    filename <- paste0(marker, ".png")
+    
+    # Save the plot to the appropriate directory
+    ggsave(file.path(cell_type_dir, filename), plot = plot, device = "png")
+  }
+}
+  
+
+```
+
+
+
+### Feature Plot for Each Cell Type
+```{r, fig.width=13, fig.height=10}
+library(patchwork)
+# Set the plot size
+
+# Adjust cell_types to match the length of marker_genes
+cell_types <- c("NK cells", "macrophages 1", "CD8+ T cells 1.1", "ccRCC 2", "CD4+ T cells", "ccRCC 4", "CD8+ T cells 1.2", "CD8+ T cells 2.2", "endothelial cells 1.1", "CAF 1", "FCGR3A+ monocytes", "TAM", "endothelial cells 1.2", "denritic cells", "Proliferative fibroblast", "UNKNOWN", "B cells", "ccRCC 1", "endothelial cells 2")
+
+# define the marker genes for each cell type
+marker_genes <- list(
+  "NK cells" = c("KLRD1", "KLRF1", "CLIC3"),
+  "macrophages 1" = c("CD14", "LYZ", "S100A12", "S100A9", "S100A8"),
+  "CD8+ T cells 1.1" = c("CD3D", "CD3E", "CD8A"),
+  "ccRCC 2" = c("CA9", "NDUFA4L2"),
+  "CD4+ T cells" = c("CD3D", "CD3E", "IL7R"),
+  "ccRCC 4" = c("SPOCK1", "PTGIS", "REG1A"),
+  "CD8+ T cells 1.2" = c("CD3D", "CD3E", "CD8A"),
+  "CD8+ T cells 2.2" = c("CD3D", "CD3E", "CD8A"),
+  "endothelial cells 1.1" = c("PECAM1", "PLVAP", "CDH5", "KDR"),
+  "CAF 1" = c("ACTA2", "TAGLN"),
+  "FCGR3A+ monocytes" = c("FAM110A", "ZNF703", "LILRB1", "SLC2A6", "GPBAR1", "CD300LF", "LINC02432"),
+  "TAM" = c("GPNMB", "SLC40A1", "MSR1"),
+  "endothelial cells 1.2" = c("PECAM1", "PLVAP", "CDH5", "KDR"),
+  "denritic cells" = c("FCER1A", "CD1E", "CD1C", "HLA-DMA", "HLA-DMB"),
+  "proliferative fibroblast" = c("MKI67", "CENPF", "TOP2A", "PCLAF", "UBE2C", "ASPM", "TPX2"),
+  "UNKNOWN" = c("CD3D", "CD3E", "CD8A"),
+  "B cells" = c("CD79A", "CD79B", "MS4A1"),
+  "ccRCC 1" = c("LRRC75A", "HEBP2", "POLR1D"),
+)
+
+
+# Create a list to store the plots
+feature_plots <- list()
+
+# Loop through each cell type and create a feature plot
+for (i in 1:length(cell_types)) {
+  plot <- FeaturePlot(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, 
+                      features = marker_genes[[i]], 
+                      cols = c("grey", "red"), 
+                      reduction = "umap", 
+                      pt.size = 1, 
+                      min.cutoff = 0.1, 
+                      max.cutoff = 3, label = TRUE)
+  
+  
+  # Store the plot in the list
+  feature_plots[[i]] <- plot
+  # Combine all individual plots into a grid
+  combined_plot <- wrap_plots(plot, ncol = 2)
+  
+  # Add a common title to the grid
+  combined_plot <- combined_plot + plot_annotation(title = cell_types[i])
+  
+  # Print the combined plot with the common title
+  print(combined_plot)
+  # save the plot
+  ggsave(paste0(cell_types[i], ".png"), plot = combined_plot, device = "png", path = "C:/Users/sigal/OneDrive - Bar Ilan University/master_degree/kaliskyLab/papers/scRNA_Cheng_Su_2021/patient_3_ccRCC2_SRR12066652/results/featurePlots")
+}
+```
+
+### Create a heatmap plotting thr top 20 genes for each cluster
+```{r}
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered.markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1) %>%
+    slice_head(n = 2) %>%
+    ungroup() -> top10
+DoHeatmap(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, features = top10$gene, size = 2) + NoLegend()
+
+```
+
+### create a new umap plot with the cluster labels
+```{r}
+# Adjust cell_types to match the length of marker_genes
+cell_types <- c("NK cells", "monocytes", "CD8+ T cells 1.1", "ccRCC 2", "CD4+ T cells", "ccRCC 1", "CD8+ T cells 1.2", "CD8+ T cells 2.1", "endothelial cells 1.1", "CAF", "FCGR3A+ monocytes", "TAM", "endothelial cells 1.2", "denritic cells", "proliferative fibroblast", "CD8+ T cells 2.2", "B cells", "ccRCC 4", "endothelial cells 2")
+
+# Rename all identities
+new.cluster.ids <- cell_types
+
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered <- RenameIdents(object = SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, 
+                               "0" = "ccRCC_UNK",
+                               "1" = "CD8+ T",
+                               "2" = "ccRCC",
+                               "3" = "endothelial cells 1",
+                               "4" = "CD4+ T cells",
+                               "5" = "endothelial cells 2",
+                               "6" = "monocytes",
+                               "7" = "CAF")
+names(new.cluster.ids) <- levels(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered)
+
+```
+
+### use cellSelector to Automatically Assign Cell identities
+```{r}
+# Assuming 'SeuratObj_patient_1_pRCC_SRR12066650_filtered' is your Seurat object
+# and 'UMAP_dimplot' is the UMAP plot you've created
+
+# Use CellSelector to interactively assign cell identities
+
+SeuratObj_patient_3_ccRCC2_SRR12066652_filtered.final <- CellSelector(plot = UMAP_dimplot, object = SeuratObj_patient_3_ccRCC2_SRR12066652_filtered, ident = "UNKNOWN")
+
+```
+
+
+```{r}
+
+# Plot the UMAP
+plot_celltypes <- DimPlot(object = SeuratObj_patient_3_ccRCC2_SRR12066652_filtered.final, 
+        reduction = "umap", 
+        label = TRUE,
+        label.size = 3,
+        repel = TRUE,
+        pt.size = 0.5)
+
+# save the umap plot
+ggsave("LABELS_UMAP_dimplot.png", plot = plot_celltypes, device = "png", width = 20, height = 15, path = plot_path)
+```
+
+### use cell selector if needed
+```{r}
+# After using CellSelector to identify the cells in question
+cells.located <- CellSelector(plot = UMAP_dimplot)
+
+# Assuming 'cells.located' contains the identities of the cells you selected
+# Retrieve their cluster assignments from the Seurat object's metadata
+clusters_of_cells_located <- SeuratObj_patient_3_ccRCC2_SRR12066652_filtered$seurat_clusters[cells.located]
+
+# See the cluster assignments
+print(clusters_of_cells_located)
+
+```
+
+
+### save the seurat object to disk
+```{r}
+saveRDS(SeuratObj_patient_3_ccRCC2_SRR12066652_filtered.final, file = "./SeuratObj_patient_3_ccRCC2_SRR12066652_filtered_final.rds")
+
+```
+
+
